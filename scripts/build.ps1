@@ -3,6 +3,7 @@ param(
     [string]$PythonExe = 'python',
     [string]$IsccPath = '',
     [switch]$SkipTests,
+    [switch]$IncludeClipboardTest,
     [switch]$SkipInstaller
 )
 
@@ -43,7 +44,11 @@ Invoke-Checked $venvPython @('-c', 'import sys; assert sys.version_info >= (3, 1
 Invoke-Checked $venvPython @('-m', 'pip', 'install', '--disable-pip-version-check', '-r', (Join-Path $projectRoot 'requirements-dev.txt'))
 
 if (-not $SkipTests) {
-    Invoke-Checked $venvPython @('-m', 'pytest', '-q')
+    $testArguments = @('-m', 'pytest', '-q', '--junitxml=build/build-tests.xml')
+    if (-not $IncludeClipboardTest) {
+        $testArguments += @('-k', 'not plain_text_widget_preserves_text_and_save')
+    }
+    Invoke-Checked $venvPython $testArguments
 }
 
 $versionOutput = & $venvPython -c 'from local_vault import __version__; print(__version__)'
@@ -89,7 +94,7 @@ foreach ($component in @('tcl8.6', 'tk8.6')) {
         Copy-Item -LiteralPath $license -Destination (Join-Path $licensesRoot "$component.txt")
     }
 }
-foreach ($document in @('README.md', 'LICENSE')) {
+foreach ($document in @('README.md', 'GOAL.md', 'LICENSE')) {
     $source = Join-Path $projectRoot $document
     if (Test-Path -LiteralPath $source) {
         Copy-Item -LiteralPath $source -Destination $applicationRoot

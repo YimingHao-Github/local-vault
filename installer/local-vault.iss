@@ -1,15 +1,24 @@
 ; 本地密匣：每用户安装，程序和保险库数据分开保存。
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "1.0.1"
+#endif
+#ifndef AppIdentifier
+  #define AppIdentifier "9F903D62-C3EA-4F18-9544-C1CE2EF5A762"
+#endif
+#ifndef AppSourceRoot
+  #define AppSourceRoot "..\dist\LocalVault"
+#endif
+#ifndef AppMutexName
+  #define AppMutexName "LocalVaultAppMutex"
 #endif
 
 [Setup]
-AppId={{9F903D62-C3EA-4F18-9544-C1CE2EF5A762}
+AppId={{{#AppIdentifier}}
 AppName=本地密匣
 AppVersion={#AppVersion}
 AppVerName=本地密匣 {#AppVersion}
 AppPublisher=LocalVault
-AppMutex=LocalVaultAppMutex
+AppMutex={#AppMutexName}
 DefaultDirName={localappdata}\Programs\LocalVault
 DefaultGroupName=本地密匣
 DisableDirPage=no
@@ -45,7 +54,7 @@ FinishedLabel=本地密匣已安装完成。%n%n首次打开时，请设置主�
 Name: "desktopicon"; Description: "创建桌面快捷方式"; Flags: unchecked
 
 [Files]
-Source: "..\dist\LocalVault\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#AppSourceRoot}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\本地密匣"; Filename: "{app}\LocalVault.exe"; WorkingDir: "{app}"

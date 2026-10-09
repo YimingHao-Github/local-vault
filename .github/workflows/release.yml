@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: 获取源码
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
       - name: 准备 Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
@@ -35,7 +37,8 @@ jobs:
           }
       - name: 测试、构建程序和安装包
         shell: pwsh
-        run: ./scripts/build.ps1 -PythonExe python
+        # 专用云端环境仅使用虚构内容，复制粘贴测试不触碰用户电脑剪贴板。
+        run: ./scripts/build.ps1 -PythonExe python -IncludeClipboardTest
       - name: 保存安装包和校验和
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -48,15 +51,33 @@ jobs:
       - name: 验证安装、升级和卸载保留数据
         shell: pwsh
         run: ./scripts/test-installation.ps1
+      - name: 保存隔离验证报告
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: LocalVault-Verification
+          path: |
+            build/*.xml
+            build/*report.json
+            build/installed-version-*.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: 保存已验证安装包至发布版本
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $document = Get-Content -LiteralPath 'docs/说明.md' -Raw -Encoding UTF8
+          $match = [regex]::Match($document, '(?s)<!-- release-notes:start -->\s*(.*?)\s*<!-- release-notes:end -->')
+          if (-not $match.Success -or [string]::IsNullOrWhiteSpace($match.Groups[1].Value)) {
+            throw '工程说明中缺少版本说明正文。'
+          }
+          $notesPath = Join-Path $env:RUNNER_TEMP 'local-vault-release-notes.md'
+          Set-Content -LiteralPath $notesPath -Value $match.Groups[1].Value.Trim() -Encoding utf8
           gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) {
-            gh release create $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY --title "本地密匣 $env:GITHUB_REF_NAME" --notes-file docs/发布说明.md --verify-tag
+            gh release create $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY --title "本地密匣 $env:GITHUB_REF_NAME" --notes-file $notesPath --verify-tag
             if ($LASTEXITCODE -ne 0) { throw '创建发布版本失败。' }
           }
           $assets = Get-ChildItem dist/LocalVault-Setup-*.exe,dist/LocalVault-Setup-*.exe.sha256 | ForEach-Object FullName

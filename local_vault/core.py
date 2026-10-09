@@ -30,11 +30,13 @@ MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_BODY_BYTES = 8 * 1024 * 1024
 MAX_ENTRIES = 10_000
 MAX_TITLE_LENGTH = 200
-MIN_PASSWORD_LENGTH = 8
+MIN_PASSWORD_LENGTH = 16
+LEGACY_MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 1024
-SCRYPT_N = 32768
+SCRYPT_N = 131072
 SCRYPT_R = 8
 SCRYPT_P = 1
+SUPPORTED_SCRYPT_PARAMETERS = frozenset({(32768, 8, 1), (SCRYPT_N, SCRYPT_R, SCRYPT_P)})
 VAULT_FORMAT = "local-vault"
 EXPORT_FORMAT = "local-vault-export"
 FORMAT_VERSION = 1
@@ -43,6 +45,13 @@ _BODY_AAD = b"local-vault:body:v1\x00"
 _CHECK_AAD = b"local-vault:password:v1\x00"
 _DIRECTORY_AAD = b"local-vault:directory:v1\x00"
 _DRAFT_AAD = b"local-vault:draft:v1\x00"
+_COMMON_PASSWORD_WORDS = frozenset({
+    "password", "passw0rd", "qwerty", "qwertyuiop", "asdfgh", "asdfghjkl", "zxcvbnm",
+    "letmein", "welcome", "admin", "administrator", "iloveyou", "changeme", "monkey",
+    "dragon", "football", "baseball", "trustno", "abc", "abcdef", "abcdefg",
+    "密码", "主密码", "测试密码", "默认密码", "我的密码",
+    "correcthorsebatterystaple",
+})
 
 
 class VaultError(Exception):
@@ -140,14 +149,49 @@ def _valid_body(value: Any) -> None:
 
 
 def _password_bytes(password: Any) -> bytes:
+    """已有文件的密码只做旧版输入范围校验，不套用新密码设置规则。"""
     if not isinstance(password, str):
         raise VaultError("密码必须是文本。")
-    if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
+    if not LEGACY_MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
         raise VaultError("密码长度必须为 8 至 1024 个字符。")
     try:
         return password.encode("utf-8")
     except UnicodeError as exc:
         raise VaultError("密码含有无法使用的字符。") from exc
+
+
+def validate_new_password(password: Any) -> None:
+    """轻量离线检查；仅用于设置密码，派生时始终使用用户原始文本。"""
+    if not isinstance(password, str):
+        raise VaultError("密码必须是文本。")
+    if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
+        raise VaultError("新密码长度必须为 16 至 1024 个字符，建议使用较长且不常见的口令。")
+    _password_bytes(password)
+    if not password.strip():
+        raise VaultError("新密码不能全部为空白。")
+    folded = password.casefold()
+    # 此处只生成检查用文本；不裁剪、转换或截断实际参与派生的密码。
+    compact = "".join(character for character in folded if character.isalnum())
+    letters = "".join(character for character in compact if not character.isdecimal())
+    common = compact in _COMMON_PASSWORD_WORDS or any(
+        letters and letters == word * (len(letters) // len(word)) for word in _COMMON_PASSWORD_WORDS)
+    repeated = any(candidate == (candidate[:size] * ((len(candidate) + size - 1) // size))[:len(candidate)]
+                   for candidate in (folded, compact) if len(candidate) >= LEGACY_MIN_PASSWORD_LENGTH
+                   for size in range(1, 5))
+    sequential = len(compact) >= LEGACY_MIN_PASSWORD_LENGTH and any(
+        compact in (sequence * ((len(compact) + len(sequence) - 1) // len(sequence) + 1))
+        for sequence in ("0123456789", "9876543210", "abcdefghijklmnopqrstuvwxyz",
+                         "zyxwvutsrqponmlkjihgfedcba", "qwertyuiopasdfghjklzxcvbnm"))
+    if common or repeated or sequential:
+        raise VaultError("新密码过于常见或规律，请使用更长且不常见的口令。")
+
+
+def _validate_kdf(kdf: Any) -> None:
+    _exact_keys(kdf, {"name", "salt", "n", "r", "p"})
+    if (kdf["name"] != "scrypt" or type(kdf["n"]) is not int or type(kdf["r"]) is not int
+            or type(kdf["p"]) is not int or (kdf["n"], kdf["r"], kdf["p"]) not in SUPPORTED_SCRYPT_PARAMETERS):
+        raise VaultError("文件中的密码派生参数不受支持。")
+    _decode(kdf["salt"], size=16)
 
 
 def _valid_idle(value: Any) -> None:
@@ -174,11 +218,7 @@ def _validate_data(data: Any, expected_format: str) -> dict[str, Any]:
     if expected_format == VAULT_FORMAT:
         _valid_idle(data["idle_minutes"])
     kdf = data["kdf"]
-    _exact_keys(kdf, {"name", "salt", "n", "r", "p"})
-    if (kdf["name"] != "scrypt" or type(kdf["n"]) is not int or type(kdf["r"]) is not int
-            or type(kdf["p"]) is not int or (kdf["n"], kdf["r"], kdf["p"]) != (SCRYPT_N, SCRYPT_R, SCRYPT_P)):
-        raise VaultError("文件中的密码派生参数不受支持。")
-    _decode(kdf["salt"], size=16)
+    _validate_kdf(kdf)
     _exact_keys(data["check"], {"nonce", "ciphertext"})
     _decode(data["check"]["nonce"], size=12)
     _decode(data["check"]["ciphertext"], size=len(_CHECK_PLAIN) + 16)
@@ -240,8 +280,9 @@ def _fingerprint(raw: bytes) -> bytes:
 
 def _derive(password: str, kdf: dict[str, Any]) -> bytes:
     try:
+        _validate_kdf(kdf)
         return Scrypt(salt=_decode(kdf["salt"], size=16), length=32,
-                      n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P).derive(_password_bytes(password))
+                      n=kdf["n"], r=kdf["r"], p=kdf["p"]).derive(_password_bytes(password))
     except VaultError:
         raise
     except (ValueError, MemoryError) as exc:
@@ -301,6 +342,7 @@ def _verify(data: dict[str, Any], password: str) -> bytes:
 
 def _new_data(password: str, entries: list[Entry], file_format: str,
               idle_minutes: int = 5) -> tuple[dict[str, Any], bytes]:
+    validate_new_password(password)
     kdf = {"name": "scrypt", "salt": _encode(os.urandom(16)), "n": SCRYPT_N, "r": SCRYPT_R, "p": SCRYPT_P}
     key = _derive(password, kdf)
     nonce = os.urandom(12)
@@ -403,20 +445,14 @@ def _sync_directory(path: Path) -> None:
             pass
 
 
-def _atomic_write(path: Path, raw: bytes, expected: bytes | None, *, backup: bool) -> None:
+def _atomic_write(path: Path, raw: bytes, expected: bytes | None) -> None:
+    """只提交当前内容；失败保留原文件，不自动生成历史副本。"""
     temporary: Path | None = None
-    backup_temporary: Path | None = None
     with _file_lock(path):
         if _existing_fingerprint(path) != expected:
             raise VaultError("文件已被其他程序修改；请重新打开保险库后再操作，避免覆盖新数据。")
         try:
             temporary = _temp_write(path, raw)
-            if backup and expected is not None:
-                previous = _read_raw(path)
-                backup_path = Path(str(path) + ".bak")
-                backup_temporary = _temp_write(backup_path, previous)
-                os.replace(backup_temporary, backup_path)
-                backup_temporary = None
             # 检测没有遵循本应用文件锁的其他写入者。
             if _existing_fingerprint(path) != expected:
                 raise VaultError("文件已被其他程序修改；本次保存已取消。")
@@ -428,12 +464,11 @@ def _atomic_write(path: Path, raw: bytes, expected: bytes | None, *, backup: boo
         except OSError as exc:
             raise VaultError("保存失败，原文件仍保留；请检查磁盘空间、文件占用和目录权限。") from exc
         finally:
-            for item in (temporary, backup_temporary):
-                if item is not None:
-                    try:
-                        item.unlink(missing_ok=True)
-                    except OSError:
-                        pass
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 def _serialized(method):
@@ -512,7 +547,7 @@ class Vault:
     def _persist(self, data: dict[str, Any], key: bytes) -> None:
         _authenticate(data, key)
         raw = _serialize(data)
-        _atomic_write(self.path, raw, self._revision, backup=True)
+        _atomic_write(self.path, raw, self._revision)
         # 只有系统替换成功后才提交内存状态。
         self._data = data
         self._revision = _fingerprint(raw)
@@ -616,7 +651,7 @@ class Vault:
         destination = _path(path)
         protected = (self.path, Path(str(self.path) + ".bak"), Path(str(self.path) + ".lock"))
         if any(os.path.normcase(str(destination)) == os.path.normcase(str(item)) for item in protected):
-            raise VaultError("请另选文件名，不能覆盖当前保险库、自动备份或锁文件。")
+            raise VaultError("请另选文件名，不能覆盖当前保险库、旧版备份或锁文件。")
         return destination
 
     @_serialized
@@ -641,7 +676,7 @@ class Vault:
         data, _ = _new_data(password, entries, EXPORT_FORMAT)
         raw = _serialize(data)
         expected = _existing_fingerprint(destination)
-        _atomic_write(destination, raw, expected, backup=True)
+        _atomic_write(destination, raw, expected)
 
     @_serialized
     def inspect_import(self, path: os.PathLike[str] | str, password: str) -> ImportPlan:
@@ -657,21 +692,25 @@ class Vault:
         for entry in local_entries:
             by_content.setdefault((entry.title, entry.body), entry)
             by_title.setdefault(entry.title, entry)
+        local_content = set(by_content)
         items: list[MergeItem] = []
         counts = {kind: 0 for kind in ("new", "duplicate", "conflict", "possible_duplicate")}
         for entry in incoming:
             exact = by_content.get((entry.title, entry.body))
-            if exact is not None:
+            # 本地已有同文仍可自动去重；导入前项的同文不能遮住编号冲突。
+            if (entry.title, entry.body) in local_content:
                 item = MergeItem(entry, "duplicate", exact)
             elif entry.id in by_id:
                 item = MergeItem(entry, "conflict", by_id[entry.id])
+            elif exact is not None:
+                item = MergeItem(entry, "duplicate", exact)
             elif entry.title in by_title:
                 item = MergeItem(entry, "possible_duplicate", by_title[entry.title])
             else:
                 item = MergeItem(entry, "new")
             items.append(item)
             counts[item.kind] += 1
-            # 导入文件内完全相同的正文同样只保留一份。
+            # 此处仅作预览分类；最终去重必须结合全部冲突选择。
             by_content.setdefault((entry.title, entry.body), entry)
             by_title.setdefault(entry.title, entry)
         token = str(uuid.uuid4())
@@ -700,22 +739,31 @@ class Vault:
             if item.kind == "possible_duplicate" and choice is not None and choice not in ("local", "both"):
                 raise VaultError("可能重复的条目只能选择保留本地或两份都保留。")
         entries = self._entries(key)
-        result = {entry.id: entry for entry in entries}
-        for item in items:
-            if item.kind == "duplicate":
-                continue
+        replacements = {item.incoming.id: item.incoming for item in items
+                        if item.kind == "conflict" and choices[item.incoming.id] == "import"}
+        # 先移除全部明确覆盖的旧版本，避免后续覆盖移走前面使用的去重依据。
+        # 不整理无关本地条目，包括本地原先就存在的同文条目。
+        result = {entry.id: entry for entry in entries if entry.id not in replacements}
+        content = {(entry.title, entry.body) for entry in result.values()}
+        for local in entries:
+            entry = replacements.get(local.id)
+            if entry is not None and (entry.title, entry.body) not in content:
+                result[entry.id] = entry
+                content.add((entry.title, entry.body))
+        # 覆盖结果已确定，所有接受的追加候选（含预览重复项）再按完整内容去重。
+        for item in sorted(items, key=lambda item: item.incoming.id):
             entry = item.incoming
             choice = choices.get(entry.id, "both" if item.kind == "possible_duplicate" else "import")
-            if choice == "local":
+            if choice == "local" or entry.id in replacements:
                 continue
-            # 处理前面的选择可能使当前内容已经存在，仍遵循完整内容去重。
-            if any(existing.title == entry.title and existing.body == entry.body for existing in result.values()):
+            if (entry.title, entry.body) in content:
                 continue
-            if choice == "both" or (entry.id in result and item.kind != "conflict"):
+            if choice == "both" or entry.id in result:
                 entry = Entry(str(uuid.uuid4()), entry.title, entry.body)
             result[entry.id] = entry
-            if len(result) > MAX_ENTRIES:
-                raise VaultError(f"合并后条目数量超过 {MAX_ENTRIES}，导入已取消。")
+            content.add((entry.title, entry.body))
+        if len(result) > MAX_ENTRIES:
+            raise VaultError(f"合并后条目数量超过 {MAX_ENTRIES}，导入已取消。")
         if list(result.values()) == entries:
             # 全部重复或保留本地时无需写盘，但已使用的计划不能再次提交。
             self._plans.clear()
@@ -733,14 +781,16 @@ class Vault:
         if _fingerprint(raw) != self._revision:
             raise VaultError("保险库文件已被修改，备份已取消。")
         expected = _existing_fingerprint(destination)
-        _atomic_write(destination, raw, expected, backup=True)
+        _atomic_write(destination, raw, expected)
 
     @_serialized
     def restore_backup(self, path: os.PathLike[str] | str, password: str) -> None:
-        raw = _read_raw(_path(path))
+        source = _path(path)
+        raw = _read_raw(source)
         data = _parse(raw, VAULT_FORMAT)
         key = _verify(data, password)
-        _atomic_write(self.path, raw, self._revision, backup=True)
+        # 不写入来源路径，也不生成恢复前副本；来源别名或硬链接同样得以保留。
+        _atomic_write(self.path, raw, self._revision)
         self._data = data
         self._revision = _fingerprint(raw)
         self._install_key(key)
