@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([Parameter(Mandatory = $true)][string]$SetupPath)
 
 $ErrorActionPreference = 'Stop'
@@ -46,8 +46,8 @@ foreach ($arguments in @(
     $process = Start-Process -FilePath $executable -ArgumentList $arguments -PassThru -Wait -WindowStyle Hidden
     if ($process.ExitCode -ne 0) { throw '安装后的隔离版本查询或自检失败。' }
 }
-$reportedVersion = Get-Content -LiteralPath $versionReport -Raw | ConvertFrom-Json
-$smoke = Get-Content -LiteralPath $smokeReport -Raw | ConvertFrom-Json
+$reportedVersion = Get-Content -LiteralPath $versionReport -Raw -Encoding UTF8 | ConvertFrom-Json
+$smoke = Get-Content -LiteralPath $smokeReport -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($reportedVersion.版本 -ne $version -or $smoke.版本 -ne $version -or $smoke.结果 -ne '通过') {
     throw '安装后的实际程序自检或版本报告不正确。'
 }
