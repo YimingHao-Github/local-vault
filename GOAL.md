@@ -139,9 +139,9 @@
 
 源码及正式标签已提交并推送，发布提交为 `ff75382a18636daab7da184e5911e91f7a78f8c6`。GitHub [正式发布 v1.0.1](https://github.com/YimingHao-Github/local-vault/releases/tag/v1.0.1) 已公开，安装包和校验文件已上传；[发布流程](https://github.com/YimingHao-Github/local-vault/actions/runs/37943982667) 的测试、构建、隔离安装升级与发布全部成功。线上程序由发布流程构建并先验证，再发布；已下载最终附件至 `dist/released`，核对两附件的 GitHub 摘要和安装包校验文件，均一致，报告 `build/release-verification.json`。
 
-正式安装包 `LocalVault-Setup-1.0.1.exe` 为 11,432,599 字节，SHA-256 为 `db0e114b23b9bc131d777f6a875f950f01398f893e7a23368daf9167e6c1255f`。本机覆盖安装使用这份最终线上安装包，保留原应用编号与 `C:\Users\YimingHao\AppData\Local\Programs\LocalVault` 安装位置，安装版本、Windows 文件版本、实际 `--version` 均为 `1.0.1`，隔离自检通过。安装程序摘要为 `40056bd9c7e628e70b79ddbdeaaea707c0a931b12905fe0189e23693683735b5`。报告为 `build/local-update-report.json`、`build/installed-version.json`、`build/local-installed-smoke.json`。未打开、读取或清理真实保险库目录；安装器不对该目录执行初始化或删除。
+正式安装包 `LocalVault-Setup-1.0.1.exe` 为 11,432,599 字节，SHA-256 为 `db0e114b23b9bc131d777f6a875f950f01398f893e7a23368daf9167e6c1255f`。本机覆盖安装使用这份最终线上安装包，保留原应用编号与 `C:\Users\YimingHao\AppData\Local\Programs\LocalVault` 安装位置，安装版本、Windows 文件版本、实际 `--version` 均为 `1.0.1`，隔离自检通过。本机已安装的 `LocalVault.exe` 摘要为 `40056bd9c7e628e70b79ddbdeaaea707c0a931b12905fe0189e23693683735b5`。报告为 `build/local-update-report.json`、`build/installed-version.json`、`build/local-installed-smoke.json`。未打开、读取或清理真实保险库目录；安装器不对该目录执行初始化或删除。
 
-覆盖安装脚本已兼容 Windows PowerShell 的 UTF-8 中文源码及 JSON 读取，并完成实际执行验证。随安装包提供的本文件是构建时的状态快照，最终发布与本机更新状态以仓库本文件为准。
+覆盖安装脚本已兼容 Windows PowerShell 的 UTF-8 中文源码及 JSON 读取，并完成实际执行验证。本轮正式安装起点为 `1.0.0`；编码修正后再次覆盖验证，最后一次报告的更新前版本为 `1.0.1`，最终实际版本仍为 `1.0.1`。随安装包提供的本文件是构建时的状态快照，最终发布与本机更新状态以仓库本文件为准。
 
 剩余限制：本机实际验证为 Windows 11，云端为 Windows Server 2025；没有在另一台物理电脑或 Windows 10 上验证。旧库仅修改主密码后才加强派生参数；旧版程序无法读取加强参数的文件。旧版遗留副本与用户主动保存的文件可能继续含有旧内容，程序不会清理或改写；删除不提供磁盘安全擦除。未保存草稿只在内存，意外退出会丢失；加密异常草稿尚未加密，界面已遮蔽并要求重新解锁处理。程序未配置代码签名证书，未进行独立安全审计。
 
