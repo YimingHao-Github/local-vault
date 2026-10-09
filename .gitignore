@@ -1,0 +1,48 @@
+# 开发环境、缓存及本地构建工具。
+.idea/
+.vscode/
+.venv*/
+venv/
+env/
+.tools/
+.codex/
+.aws/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# 构建产物仅发布到 GitHub 发布版本。
+/build/
+/dist/
+*.spec
+*.egg-info/
+
+# 私人保险库、导出、备份和本地凭据不得进入公开仓库。
+*.lvault
+*.lvexport
+*.lvbackup
+*.bak
+*.lock
+*.tmp
+*.log
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+secrets/
+private/
+data/
+local-data/
+
+# 操作系统文件。
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 公开的虚构条目样例允许提交。
+!tests/fixtures/fake_entries.json

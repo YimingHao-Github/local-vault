@@ -1,0 +1,14 @@
+[
+  {
+    "title": "虚构邮箱账号",
+    "body": "账号：tester@example.invalid\n密码：Fake-Password-Only-2026!\n备注：此条目完全虚构，不可用于真实登录。"
+  },
+  {
+    "title": "虚构服务配置",
+    "body": "  Host = demo.invalid  \r\nToken=FAKE_TOKEN_FOR_TEST_ONLY\r\n\r\n大小写须保留：AbCdEf\n末尾留空格：   \n"
+  },
+  {
+    "title": "虚构授权码",
+    "body": "授权码：DEMO-NOT-A-REAL-LICENSE\n说明：仅用于本地密匣开发和测试。\n\n第一行\n  缩进的第二行\n第三行"
+  }
+]

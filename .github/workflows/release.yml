@@ -1,0 +1,66 @@
+name: Windows 测试与发布
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: 获取源码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: 准备 Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+          architecture: 'x64'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: 验证版本标签
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $version = python -c 'from local_vault import __version__; print(__version__)'
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "版本标签与源码版本不一致：$env:GITHUB_REF_NAME / $version"
+          }
+      - name: 测试、构建程序和安装包
+        shell: pwsh
+        run: ./scripts/build.ps1 -PythonExe python
+      - name: 保存安装包和校验和
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: LocalVault-Windows
+          path: |
+            dist/LocalVault-Setup-*.exe
+            dist/LocalVault-Setup-*.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: 验证安装、升级和卸载保留数据
+        shell: pwsh
+        run: ./scripts/test-installation.ps1
+      - name: 保存已验证安装包至发布版本
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY --title "本地密匣 $env:GITHUB_REF_NAME" --notes-file docs/发布说明.md --verify-tag
+            if ($LASTEXITCODE -ne 0) { throw '创建发布版本失败。' }
+          }
+          $assets = Get-ChildItem dist/LocalVault-Setup-*.exe,dist/LocalVault-Setup-*.exe.sha256 | ForEach-Object FullName
+          gh release upload $env:GITHUB_REF_NAME @assets --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw '上传发布安装包失败。' }
+    permissions:
+      contents: write

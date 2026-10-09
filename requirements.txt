@@ -1,0 +1,5 @@
+# -*- coding: utf-8 -*-
+# 运行依赖及传递依赖均固定版本。
+cryptography==50.0.2
+cffi==2.1.1
+pycparser==3.1
