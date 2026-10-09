@@ -15,6 +15,7 @@ from tkinter import filedialog as tk_filedialog, messagebox as tk_messagebox, tt
 
 from local_vault import __version__
 from local_vault.core import Entry, Vault, VaultError, validate_new_password
+from local_vault.location import InstanceLock, LocationSession, installation_directory
 
 
 def dialog_app(parent):
@@ -154,6 +155,11 @@ class VaultFileDialog(tk_filedialog.FileDialog):
 
 
 class FileDialogs:
+    def askdirectory(self, parent=None, **options):
+        if dialog_app(parent) is None:
+            return tk_filedialog.askdirectory(parent=parent, **options)
+        return VaultDirectoryDialog(parent, **options).show()
+
     def askopenfilename(self, parent=None, **options):
         if dialog_app(parent) is None:
             return tk_filedialog.askopenfilename(parent=parent, **options)
@@ -166,6 +172,45 @@ class FileDialogs:
 
 
 filedialog = FileDialogs()
+
+
+class VaultDirectoryDialog(VaultFileDialog):
+    """选择文件夹也沿用现有可响应闲置锁定的中文窗口。"""
+    def __init__(self, parent, **options):
+        super().__init__(parent, **options)
+        self.ok_button.configure(text="选择此文件夹")
+        self.files.pack_forget()
+        self.filesbar.pack_forget()
+        self.selection.delete(0, "end")
+        self.selection.insert(0, self.directory)
+
+    def filter_command(self, event=None):
+        super().filter_command(event)
+        self.selection.delete(0, "end")
+        self.selection.insert(0, self.directory)
+
+    def show(self):
+        previous_grab = self.master.grab_current()
+        try:
+            return super().show()
+        finally:
+            if previous_grab is not None and previous_grab.winfo_exists():
+                previous_grab.grab_set()
+
+    def dirs_select_event(self, event):
+        super().dirs_select_event(event)
+        directory, _ = self.get_filter()
+        self.selection.delete(0, "end")
+        self.selection.insert(0, directory)
+
+    def ok_command(self):
+        directory = Path(self.get_selection()).expanduser()
+        if self.app is not None and not self.app.continue_session(self.epoch, require_unlocked=False):
+            return
+        if not directory.is_dir():
+            messagebox.showwarning("目录不可用", "请选择已存在且可访问的文件夹。", parent=self.top)
+            return
+        self.quit(str(directory))
 
 
 def interaction(method):
@@ -372,10 +417,11 @@ class MergeDialog(tk.Toplevel):
 
 
 class VaultApp:
-    def __init__(self, root: tk.Tk, vault: Vault):
+    def __init__(self, root: tk.Tk, vault: Vault, location=None):
         self.root = root
         root.vault_app = self
         self.vault = vault
+        self.location = location
         self.current_id = None
         self.original = None
         self.draft = None
@@ -515,6 +561,8 @@ class VaultApp:
         """已经开始的写入先提交或失败回滚，再处理闲置锁定。"""
         self.write_depth += 1
         try:
+            if self.location is not None:
+                self.location.prepare_write()
             yield
         finally:
             self.write_depth -= 1
@@ -589,7 +637,10 @@ class VaultApp:
             self.status.set("尚未设置主密码。点击新增条目可重新设置。")
             return False
         try:
-            self.vault.create(password)
+            if self.location is not None:
+                self.location.create(password)
+            else:
+                self.vault.create(password)
             self.update_state()
             self.status.set("主密码已设置。点击新增条目，开始保存文本。")
             return True
@@ -991,6 +1042,28 @@ class VaultApp:
             self.error(exc)
 
     @interaction
+    def change_location(self):
+        if self.location is None:
+            self.error(VaultError("此隔离会话未提供位置管理。"))
+            return False
+        epoch = self.session_epoch
+        directory = self.file_dialog(filedialog.askdirectory, title="更改保险库保存位置",
+                                     initialdir=self.vault.path.parent)
+        if not directory or not self.continue_session(epoch, require_unlocked=False):
+            return False
+        if not self.resolve_dirty() or not self.continue_session(epoch, require_unlocked=False):
+            return False
+        try:
+            with self.writing():
+                changed = self.location.change_directory(directory)
+                if changed:
+                    self.status.set(f"保险库已迁移，保存位置：{self.vault.path}")
+                return changed
+        except (VaultError, OSError) as exc:
+            self.error(exc)
+            return False
+
+    @interaction
     def settings(self):
         if not self.ensure_unlocked():
             return
@@ -1001,6 +1074,14 @@ class VaultApp:
         window.transient(self.root)
         frame = ttk.Frame(window, padding=22)
         frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="当前保险库保存位置").pack(anchor="w")
+        location_text = tk.StringVar(value=str(self.vault.path))
+        ttk.Entry(frame, textvariable=location_text, state="readonly", width=70).pack(fill="x", pady=8)
+        def change():
+            if self.continue_session(epoch) and self.change_location() and window.winfo_exists():
+                location_text.set(str(self.vault.path))
+                window.grab_set()
+        ttk.Button(frame, text="更改保存位置…", command=change).pack(anchor="w", pady=(0, 14))
         ttk.Label(frame, text="闲置自动锁定（分钟，0 表示关闭）").pack(anchor="w")
         minutes = tk.StringVar(value=str(self.vault.idle_minutes))
         ttk.Spinbox(frame, from_=0, to=120, textvariable=minutes, width=12).pack(anchor="w", pady=8)
@@ -1037,31 +1118,6 @@ class VaultApp:
         self.vault.lock()
         self.set_editor(None)
         self.root.destroy()
-
-
-class InstanceLock:
-    """每个数据目录只允许一个窗口，避免两个实例互相覆盖。"""
-    def __init__(self, directory):
-        directory.mkdir(parents=True, exist_ok=True)
-        self.file = (directory / "application.lock").open("a+b")
-        self.file.seek(0, os.SEEK_END)
-        if self.file.tell() == 0:
-            self.file.write(b"0")
-            self.file.flush()
-        self.file.seek(0)
-        try:
-            if os.name == "nt":
-                import msvcrt
-                msvcrt.locking(self.file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            self.file.close()
-            raise VaultError("此保险库已在另一个窗口打开，请使用已有窗口。") from exc
-
-    def close(self):
-        self.file.close()
 
 
 class InstallerMutex:
@@ -1130,17 +1186,24 @@ def main():
         return
     root = tk.Tk()
     root.withdraw()
-    directory = args.data_dir or Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "LocalVault"
-    instance = None
+    directory = args.data_dir or installation_directory()
+    legacy = None if args.data_dir else Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "LocalVault"
+    location = None
     installer_mutex = None
     try:
-        instance = InstanceLock(directory)
         installer_mutex = InstallerMutex()
-        vault_path = directory / "vault.lvault"
-        try:
-            vault = Vault(vault_path)
-        except VaultError as exc:
-            if not messagebox.askyesno("保险库无法读取", f"{exc}\n\n原文件会保留。是否选择完整加密备份进行恢复？", parent=root):
+        recovery_target = None
+        while location is None:
+            try:
+                location = LocationSession(directory, legacy, recovery_target=recovery_target)
+            except (VaultError, OSError) as exc:
+                if not messagebox.askyesno("保存位置无法使用", f"{exc}\n\n原保险库会保留，不会用空库替代。是否选择可用文件夹迁移原库或重试？", parent=root):
+                    return
+                recovery_target = filedialog.askdirectory(parent=root, title="选择可用的保险库保存位置", initialdir=directory)
+                if not recovery_target:
+                    return
+        if location.load_error is not None:
+            if not messagebox.askyesno("保险库无法读取", f"{location.load_error}\n\n原文件会保留。是否选择完整加密备份进行恢复？", parent=root):
                 return
             filename = filedialog.askopenfilename(parent=root, title="恢复完整加密备份", filetypes=[("完整加密备份", "*.lvbackup"), ("所有文件", "*.*")])
             if not filename:
@@ -1148,16 +1211,16 @@ def main():
             password = PasswordDialog(root, "恢复备份", "请输入备份创建时的主密码。恢复会替换全部本地内容，恢复来源会保留。").result
             if password is None:
                 return
-            vault = Vault.for_restore(vault_path)
-            vault.restore_backup(filename, password)
-        VaultApp(root, vault)
+            location.vault.restore_backup(filename, password)
+            location.change_directory(location.desired_directory, remember=bool(recovery_target))
+        VaultApp(root, location.vault, location)
         root.deiconify()
         root.mainloop()
     except (VaultError, OSError) as exc:
         messagebox.showerror("本地密匣无法打开", f"{exc}\n\n数据目录：{directory}\n原数据不会被重新初始化。", parent=root)
     finally:
-        if instance is not None:
-            instance.close()
+        if location is not None:
+            location.close()
         if installer_mutex is not None:
             installer_mutex.close()
 

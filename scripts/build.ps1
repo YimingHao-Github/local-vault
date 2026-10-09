@@ -33,9 +33,24 @@ function Assert-ProjectPath {
     }
 }
 
+function Assert-NoPackagedData {
+    param([string]$Directory)
+    Assert-ProjectPath $Directory
+    if (Test-Path -LiteralPath $Directory) {
+        $unexpected = Get-ChildItem -LiteralPath $Directory -File -Recurse -Force |
+            Where-Object { $_.Extension -in @('.lvault', '.lvexport', '.lvbackup', '.bak', '.lock', '.tmp') -or $_.Name -eq 'location.json' }
+        if ($unexpected) {
+            throw "构建目录包含保险库、临时数据或本机位置设置，请先自行保管这些文件，构建不会删除或打包它们：$($unexpected.FullName -join '，')"
+        }
+    }
+}
+
 foreach ($path in @($buildRoot, $distRoot, $toolRoot, $venvRoot)) {
     Assert-ProjectPath $path
 }
+# PyInstaller 会重建目录，先阻止它删除之前运行分发程序留下的数据。
+$applicationRoot = Join-Path $distRoot 'LocalVault'
+Assert-NoPackagedData $applicationRoot
 
 if (-not (Test-Path -LiteralPath $venvPython)) {
     Invoke-Checked $PythonExe @('-m', 'venv', $venvRoot)
@@ -71,7 +86,6 @@ Invoke-Checked $venvPython @(
     (Join-Path $projectRoot 'local_vault/__main__.py')
 )
 
-$applicationRoot = Join-Path $distRoot 'LocalVault'
 $licensesRoot = Join-Path $applicationRoot 'licenses'
 New-Item -ItemType Directory -Force -Path $licensesRoot | Out-Null
 Copy-Item -Path (Join-Path $projectRoot 'installer/licenses/*') -Destination $licensesRoot
@@ -113,6 +127,7 @@ $smoke = Start-Process -FilePath (Join-Path $applicationRoot 'LocalVault.exe') -
     '--report', ('"' + (Join-Path $buildRoot 'smoke-report.json') + '"')
 ) -PassThru -Wait -WindowStyle Hidden
 if ($smoke.ExitCode -ne 0) { throw "打包程序自检失败，退出码 $($smoke.ExitCode)" }
+Assert-NoPackagedData $applicationRoot
 
 if (-not $SkipInstaller) {
     if ([string]::IsNullOrWhiteSpace($IsccPath)) {

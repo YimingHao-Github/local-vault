@@ -545,6 +545,8 @@ class Vault:
         self._plans.clear()
 
     def _persist(self, data: dict[str, Any], key: bytes) -> None:
+        if hasattr(self, "_location_guard"):
+            self._location_guard()
         _authenticate(data, key)
         raw = _serialize(data)
         _atomic_write(self.path, raw, self._revision)
@@ -789,6 +791,8 @@ class Vault:
         raw = _read_raw(source)
         data = _parse(raw, VAULT_FORMAT)
         key = _verify(data, password)
+        if hasattr(self, "_location_guard"):
+            self._location_guard()
         # 不写入来源路径，也不生成恢复前副本；来源别名或硬链接同样得以保留。
         _atomic_write(self.path, raw, self._revision)
         self._data = data
